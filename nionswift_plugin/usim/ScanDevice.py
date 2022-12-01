@@ -521,6 +521,51 @@ class Device(scan_base.ScanDevice):
         return 2
 
 
+from nion.ui import Declarative
+from nion.instrumentation import HardwareSource
+
+class Handler(Declarative.Handler):
+    # the handler for the custom scan UI
+
+    def __init__(self, hardware_source_id: str) -> None:
+        super().__init__()
+        # build the UI
+        u = Declarative.DeclarativeUI()
+        self.ui_view = u.create_column(
+            u.create_stretch(),
+            u.create_row(
+                u.create_stretch(),
+                u.create_push_button(text="Start", on_clicked="handle_start_pushed"),
+                u.create_spacing(12),
+                u.create_push_button(text="Stop", on_clicked="handle_stop_pushed"),
+                u.create_stretch(),
+            ),
+            u.create_stretch(),
+        )
+        self.hardware_source_id = hardware_source_id
+
+    def handle_start_pushed(self, widget: Declarative.UIWidget) -> None:
+        scan_hardware_source = HardwareSource.HardwareSourceManager().get_hardware_source_for_hardware_source_id(self.hardware_source_id)
+        if scan_hardware_source:
+            scan_hardware_source.start_playing()
+
+    def handle_stop_pushed(self, widget: Declarative.UIWidget) -> None:
+        scan_hardware_source = HardwareSource.HardwareSourceManager().get_hardware_source_for_hardware_source_id(self.hardware_source_id)
+        if scan_hardware_source:
+            scan_hardware_source.stop_playing()
+
+
+class PanelFactory:
+    # matches the 'ultra_simple' panel type.
+    # implements the get_ui_handler to return a special scan control panel UI
+
+    panel_type = "ultra_simple"
+
+    def get_ui_handler(self, api_broker=None, event_loop=None, hardware_source_id=None,
+                       scan_device=None, scan_settings=None, **kwargs):
+        return Handler(hardware_source_id)
+
+
 class ScanModule(scan_base.ScanModule):
     def __init__(self, instrument: InstrumentDevice.Instrument) -> None:
         self.stem_controller_id = instrument.instrument_id
@@ -532,10 +577,29 @@ class ScanModule(scan_base.ScanModule):
             scan_base.ScanSettingsMode(_("Record"), "record", ScanFrameParameters(pixel_size=(1024, 1024), pixel_time_us=1, fov_nm=instrument.stage_size_nm * 1.0))
         )
         self.settings = scan_base.ScanSettings(scan_modes, lambda d: ScanFrameParameters(d), 0, 2)
+        # declare that this scan module should use the 'ultra_simple' panel type.
+        # a factory for that panel type must be registered as a 'scan_panel' component.
+        # the factory must implement the 'get_ui_handler' method and return a declarative
+        # handler. These are implemented using PanelFactory and Handler.
+        self.panel_type = "ultra_simple"
+
+
+scan_module: typing.Optional[ScanModule] = None
+scan_panel_factory: typing.Optional[PanelFactory] = None
 
 
 def run(instrument: InstrumentDevice.Instrument) -> None:
-    Registry.register_component(ScanModule(instrument), {"scan_module"})
+    global scan_module
+    scan_module = ScanModule(instrument)
+    Registry.register_component(scan_module, {"scan_module"})
+    global scan_panel_factory
+    scan_panel_factory = PanelFactory()
+    Registry.register_component(scan_panel_factory, {"scan_panel"})
 
 def stop() -> None:
-    Registry.unregister_component(Registry.get_component("scan_module"), {"scan_module"})
+    global scan_module
+    Registry.unregister_component(scan_module, {"scan_module"})
+    scan_module = None
+    global scan_panel_factory
+    Registry.unregister_component(scan_panel_factory, {"scan_panel"})
+    scan_panel_factory = None
